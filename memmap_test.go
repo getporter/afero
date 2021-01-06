@@ -450,46 +450,174 @@ func TestMemFsUnexpectedEOF(t *testing.T) {
 	}
 }
 
+const rootFile = "root.txt"
+const subDir = "sub"
+const subFile = "sub.txt"
+
+// Create tree structure in the specified location
+// /root
+//   root.txt
+//   sub/
+//     sub.txt
+func createTree(fs Fs, rootDir string) error {
+	err := fs.MkdirAll(filepath.Join(rootDir, subDir), 0777)
+	if err != nil {
+		return fmt.Errorf("MkDirAll failed: %s", err)
+	}
+
+	_, err = fs.Create(filepath.Join(rootDir, rootFile))
+	if err != nil {
+		return fmt.Errorf("create rootFile failed: %s", err)
+	}
+
+	_, err = fs.Create(filepath.Join(rootDir, subDir, subFile))
+	if err != nil {
+		return fmt.Errorf("create subFile failed: %s", err)
+	}
+
+	return nil
+}
+
+// Verify the tree structure exists in the specified location
+func verifyTree(fs Fs, rootDir string, exists bool) error {
+	verifyPath := func(path string) error {
+		_, err := fs.Stat(path)
+		if os.IsNotExist(err) == exists {
+			if exists {
+				return fmt.Errorf("%s was not created", path)
+			} else {
+				return fmt.Errorf("%s still exists", path)
+			}
+		}
+		return nil
+	}
+
+	if err := verifyPath(filepath.Join(rootDir, subDir)); err != nil {
+		return err
+	}
+	if err := verifyPath(filepath.Join(rootDir, subDir, subFile)); err != nil {
+		return err
+	}
+	if err := verifyPath(rootDir); err != nil {
+		return err
+	}
+	if err := verifyPath(filepath.Join(rootDir, rootFile)); err != nil {
+		return err
+	}
+	return nil
+}
+
 func TestMemFsRenameDir(t *testing.T) {
-	const srcPath = "/src"
-	const dstPath = "/dst"
-	const subDir = "dir"
+	const src = "/src"
+	const dst = "/dst"
+	const sibling = "/srcy"
 
 	fs := NewMemMapFs()
 
-	err := fs.MkdirAll(srcPath+FilePathSeparator+subDir, 0777)
+	// Create a directory that matches if we don't compare prefix paths correctly
+	// It should still exist at the end of the test
+	err := fs.MkdirAll(sibling, 0777)
 	if err != nil {
-		t.Errorf("MkDirAll failed: %s", err)
+		t.Fatalf("MkDirAll failed: %s", err)
+	}
+
+	if err := createTree(fs, src); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := verifyTree(fs, src, true); err != nil {
+		t.Fatalf("could not create source tree structure: %s", err)
+	}
+
+	// Rename the root directory in the tree
+	err = fs.Rename(src, "/dst")
+	if err != nil {
+		t.Fatalf("Rename failed: %s", err)
 		return
 	}
 
-	err = fs.Rename(srcPath, dstPath)
-	if err != nil {
-		t.Errorf("Rename failed: %s", err)
-		return
+	// Verify the tree exists in the renamed location
+	if err = verifyTree(fs, dst, true); err != nil {
+		t.Fatalf("the renamed tree structure was not created: %s", err)
 	}
 
-	_, err = fs.Stat(srcPath + FilePathSeparator + subDir)
+	// Verify the entire tree structure is no longer in the source location
+	if err = verifyTree(fs, src, false); err != nil {
+		t.Fatalf("the original tree structure was not removed %s", err)
+	}
+
+	// Verify we can recreate the original root directory
+	if err = createTree(fs, src); err != nil {
+		t.Fatalf("could not recreate the original tree structure: %s", err)
+	}
+	err = verifyTree(fs, src, true)
+	if err != nil {
+		t.Fatalf("the original tree structure doesn't exist: %s", err)
+	}
+
+	// Verify we didn't greedy match a sibling directory
+	_, err = fs.Stat(sibling)
+	if err != nil {
+		t.Fatal("the sibling directory should not have been deleted as well")
+	}
+}
+
+func TestMemFsRemoveAll(t *testing.T) {
+	const root = "/root"
+	const sibling = "/rooty"
+
+	fs := NewMemMapFs()
+
+	// Create a directory that matches if we don't compare prefix paths correctly
+	// It should still exist at the end of the test
+	err := fs.MkdirAll(sibling, 0777)
+	if err != nil {
+		t.Fatalf("MkDirAll failed: %s", err)
+	}
+
+	if err := createTree(fs, root); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := verifyTree(fs, root, true); err != nil {
+		t.Fatalf("could not create source tree structure: %s", err)
+	}
+
+	// Remove the tree
+	err = fs.RemoveAll(root)
+	if err != nil {
+		t.Fatalf("RemoveAll failed: %s", err)
+	}
+
+	// Verify the tree is deleted
+	if err = verifyTree(fs, root, false); err != nil {
+		t.Fatalf("the renamed tree structure was not removed: %s", err)
+	}
+
+	// Verify we didn't greedy match a sibling directory
+	_, err = fs.Stat(sibling)
+	if err != nil {
+		t.Fatal("the sibling directory should not have been deleted as well")
+	}
+}
+
+func TestMemFsRemove(t *testing.T) {
+	const emptyDir = "/root"
+
+	fs := NewMemMapFs()
+
+	err := fs.MkdirAll(emptyDir, 0777)
+	if err != nil {
+		t.Fatalf("MkDirAll failed: %s", err)
+	}
+
+	err = fs.Remove(emptyDir)
+	if err != nil {
+		t.Fatalf("Remove failed: %s", err)
+	}
+
+	_, err = fs.Stat(emptyDir)
 	if err == nil {
-		t.Errorf("SubDir still exists in the source dir")
-		return
-	}
-
-	_, err = fs.Stat(dstPath + FilePathSeparator + subDir)
-	if err != nil {
-		t.Errorf("SubDir stat in the destination dir: %s", err)
-		return
-	}
-
-	err = fs.Mkdir(srcPath, 0777)
-	if err != nil {
-		t.Errorf("Cannot recreate the source dir: %s", err)
-		return
-	}
-
-	err = fs.Mkdir(srcPath+FilePathSeparator+subDir, 0777)
-	if err != nil {
-		t.Errorf("Cannot recreate the subdir in the source dir: %s", err)
-		return
+		t.Fatalf("The directory still exists")
 	}
 }

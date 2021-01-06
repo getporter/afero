@@ -264,6 +264,7 @@ func (m *MemMapFs) RemoveAll(path string) error {
 	path = normalizePath(path)
 	m.mu.Lock()
 	m.unRegisterWithParent(path)
+	delete(m.getData(), path)
 	m.mu.Unlock()
 
 	m.mu.RLock()
